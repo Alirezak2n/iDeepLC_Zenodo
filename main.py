@@ -5,7 +5,7 @@ import wandb
 import argparse
 from torch import nn, optim
 from copy import deepcopy
-
+from figures import make_figures
 from config import get_config
 from data_initialize import data_initialize
 from model import MyNet
@@ -75,6 +75,8 @@ def main():
     # Evaluate on the test set
     evaluate_model(model, dataloader_test, dataloader_test_extra, loss_function, device, best_model_path, args.eval_type, args.save_results)
 
+    # Generate Figures
+    make_figures(model, best_model_path, loss_function, dataloader_test, args.eval_type, dataloader_test_extra, args.save_results)
     wandb.finish()
 
 
