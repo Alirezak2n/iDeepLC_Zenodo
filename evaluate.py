@@ -21,15 +21,14 @@ def validate(
     :param device: The device to train on (GPU or CPU).
     :return: Average loss, correlation coefficient, predictions, and ground truth values.
     """
-
+    model.to(device)
     model.eval()
     total_loss = 0.0
     outputs, targets = [], []
 
     with torch.no_grad():
         for inputs, labels in dataloader:
-            if device.type == 'cuda':
-                inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+            inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             outputs_batch = model(inputs.float())
             loss = loss_fn(outputs_batch, labels.float().view(-1, 1))
 
@@ -66,24 +65,32 @@ def evaluate_model(
     :param save_results: If True, saves the evaluation results.
     """
     model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)  # Ensure model is on correct device
 
+    # Validate on the primary test set
     loss_test, corr_test, output_test, y_test = validate(model, dataloader_test, loss_fn, device)
     print(f'Test Loss: {loss_test:.4f}, Correlation: {corr_test:.4f}')
+
+    output_extra, y_extra = None, None  # Default values for cases without extra dataset
     if dataloader_extra is not None:
         loss_extra, corr_extra, output_extra, y_extra = validate(model, dataloader_extra, loss_fn, device)
         print(f'{eval_type} Test Loss: {loss_extra:.4f}, Correlation: {corr_extra:.4f}')
+    else:
+        loss_extra, corr_extra = None, None
 
+    # Save results
     if save_results:
         filename = model_path.replace('.pth', '_results.csv')
-        if dataloader_extra is not None:
-            # Stack three columns
+
+        if output_extra is not None:
             data_to_save = np.column_stack((y_test, output_test, output_extra))
             header = "y_test,output_test,output_extra"
         else:
-            # Stack only two columns (avoid NoneType values)
             data_to_save = np.column_stack((y_test, output_test))
             header = "y_test,output_test"
 
         np.savetxt(filename, data_to_save, delimiter=',', header=header, fmt='%.6f')
         print(f"Results saved to {filename}")
+
+    return loss_test, corr_test, output_test, y_test  # Ensure a proper return value
 

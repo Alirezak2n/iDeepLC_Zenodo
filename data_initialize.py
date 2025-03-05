@@ -42,7 +42,7 @@ Tuple[DataLoader, DataLoader, DataLoader, DataLoader, np.ndarray]]:
 
 
     if eval_type == "20datasets":
-        dataset_path = f"Zenodo/20_datasets_evaluation/datasets/{dataset_name}/"
+        dataset_path = f"../data/20_datasets_evaluation/{dataset_name}/"
         train_x = np.load(dataset_path + 'train_x.npy')
         train_y = np.load(dataset_path + 'train_y.npy')
         val_x = np.load(dataset_path + 'val_x.npy')
@@ -51,7 +51,7 @@ Tuple[DataLoader, DataLoader, DataLoader, DataLoader, np.ndarray]]:
         test_y = np.load(dataset_path + 'test_y.npy')
 
     elif eval_type == "ptm":
-        dataset_path = f"Zenodo/PTM_evaluation/ptm_datasets/{dataset_name}/"
+        dataset_path = f"../data/PTM_evaluation/ptm_datasets/{dataset_name}/"
         train_x = np.load(dataset_path + 'train_x.npy')
         train_y = np.load(dataset_path + 'train_y.npy')
         val_x = np.load(dataset_path + 'val_x.npy')
@@ -62,7 +62,7 @@ Tuple[DataLoader, DataLoader, DataLoader, DataLoader, np.ndarray]]:
         test_no_mod_y = np.load(dataset_path + 'test_no_mod_y.npy')
 
     elif eval_type == "aa_glycine":
-        dataset_path = f"Zenodo/modified_glycine_evaluation/aa_glycine_datasets/{dataset_name}_{test_aa}_"
+        dataset_path = f"../data/modified_glycine_evaluation/aa_glycine_datasets/{dataset_name}_{test_aa}_"
         df_train = pd.read_csv(f'{dataset_path}train.csv', keep_default_na=False)
         df_val = pd.read_csv(f'{dataset_path}valid.csv', keep_default_na=False)
         df_test = pd.read_csv(f'{dataset_path}test.csv', keep_default_na=False)

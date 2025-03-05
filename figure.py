@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import mean_absolute_error
 from torch.utils.data import DataLoader
-from evaluate import validate
+from evaluate import validate, evaluate_model
 
 
 def make_figures(
@@ -29,16 +29,23 @@ def make_figures(
     :param dataloader_extra: Additional test DataLoader (for `ptm` and `aa_glycine`).
     :param save_results: Whether to save results as a CSV file.
     """
-    model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Set correct device
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)  # Ensure model is on correct device
 
-    # Validate the model on the primary test set
-    loss_test, corr_test, output_test, y_test = validate(model, dataloader_test, loss_fn, torch.device("cpu"))
+    # Ensure that evaluate_model returns valid values
+    result = evaluate_model(model, dataloader_test, dataloader_extra, loss_fn, device, model_path, eval_type,
+                            save_results)
+
+    if result is None:
+        raise RuntimeError("evaluate_model() returned None. This likely means the function did not execute correctly.")
+
+    loss_test, corr_test, output_test, y_test = result  # Unpack properly
 
     print(f"\nTest Set Loss: {loss_test:.4f}, Correlation: {corr_test:.4f}\n")
 
-    # Handle extra dataset for specific evaluation types
     if eval_type in ["ptm", "aa_glycine"] and dataloader_extra is not None:
-        loss_extra, corr_extra, output_extra, y_extra = validate(model, dataloader_extra, loss_fn, torch.device("cpu"))
+        loss_extra, corr_extra, output_extra, y_extra = validate(model, dataloader_extra, loss_fn, device)
         print(f"\nExtra Test Set Loss: {loss_extra:.4f}, Correlation: {corr_extra:.4f}\n")
     else:
         output_extra, y_extra = None, None
@@ -47,7 +54,6 @@ def make_figures(
     if save_results:
         filename = model_path.replace(".pth", "_results.csv")
 
-        # If there is an extra dataset, include it in results
         if output_extra is not None:
             data_to_save = np.column_stack((y_test, output_test, output_extra))
             header = "y_test,output_test,output_extra"
@@ -58,7 +64,7 @@ def make_figures(
         np.savetxt(filename, data_to_save, delimiter=",", header=header, fmt="%.6f")
         print(f"Results saved to {filename}")
 
-    # Generate and save figures
+    # Generate figures
     if eval_type == "20datasets":
         plot_20datasets(y_test, output_test, model_path)
     elif eval_type == "ptm":
@@ -83,8 +89,9 @@ def plot_20datasets(y_test, output_test, model_path):
     ax.plot([0, max_value], [0, max_value], ls="--", c=".5")
     plt.xlim(0, max_value)
     plt.ylim(0, max_value)
-    plt.savefig(model_path.replace(".pth", "_20datasets.png"), dpi=300)
-    print(f"Figure saved: {model_path.replace('.pth', '_20datasets.png')}")
+    plt.show()
+    # plt.savefig(model_path.replace(".pth", "_20datasets.png"), dpi=300)
+    # print(f"Figure saved: {model_path.replace('.pth', '_20datasets.png')}")
 
 
 def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path):
