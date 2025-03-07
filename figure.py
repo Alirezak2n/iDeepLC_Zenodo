@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+
 import torch
 import numpy as np
 import pandas as pd
@@ -16,7 +18,8 @@ def make_figures(
     dataloader_test: DataLoader,
     eval_type: str,
     dataloader_extra: DataLoader = None,
-    save_results: bool = False
+    save_results: bool = False,
+    eval_results: tuple = None
 ):
     """
     Generate figures based on evaluation type.
@@ -28,43 +31,27 @@ def make_figures(
     :param eval_type: Evaluation type (`20datasets`, `ptm`, `aa_glycine`).
     :param dataloader_extra: Additional test DataLoader (for `ptm` and `aa_glycine`).
     :param save_results: Whether to save results as a CSV file.
+    :param eval_results: Evaluation results from `evaluate_model`.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Set correct device
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)  # Ensure model is on correct device
 
-    # Ensure that evaluate_model returns valid values
-    result = evaluate_model(model, dataloader_test, dataloader_extra, loss_fn, device, model_path, eval_type,
-                            save_results)
+    # If eval_results is provided, use it instead of re-running evaluation
+    if eval_results:
+        loss_test, corr_test, output_test, y_test = eval_results
+    else:
+        # If eval_results is not provided, fall back to running evaluate_model (not recommended)
+        loss_test, corr_test, output_test, y_test = evaluate_model(model, dataloader_test, dataloader_extra,
+                                                                   loss_fn, torch.device("cpu"), model_path,
+                                                                   eval_type, save_results)
 
-    if result is None:
-        raise RuntimeError("evaluate_model() returned None. This likely means the function did not execute correctly.")
-
-    loss_test, corr_test, output_test, y_test = result  # Unpack properly
-
-    print(f"\nTest Set Loss: {loss_test:.4f}, Correlation: {corr_test:.4f}\n")
-
+    # Handle extra dataset for specific evaluation types
+    output_extra, y_extra = None, None
     if eval_type in ["ptm", "aa_glycine"] and dataloader_extra is not None:
         loss_extra, corr_extra, output_extra, y_extra = validate(model, dataloader_extra, loss_fn, device)
         print(f"\nExtra Test Set Loss: {loss_extra:.4f}, Correlation: {corr_extra:.4f}\n")
-    else:
-        output_extra, y_extra = None, None
 
-    # Save results
-    if save_results:
-        filename = model_path.replace(".pth", "_results.csv")
 
-        if output_extra is not None:
-            data_to_save = np.column_stack((y_test, output_test, output_extra))
-            header = "y_test,output_test,output_extra"
-        else:
-            data_to_save = np.column_stack((y_test, output_test))
-            header = "y_test,output_test"
-
-        np.savetxt(filename, data_to_save, delimiter=",", header=header, fmt="%.6f")
-        print(f"Results saved to {filename}")
-
-    # Generate figures
+    # Generate figures based on eval_type
     if eval_type == "20datasets":
         plot_20datasets(y_test, output_test, model_path)
     elif eval_type == "ptm":
@@ -73,7 +60,6 @@ def make_figures(
         plot_aa_glycine(model_path)
     else:
         print("Unknown evaluation type, skipping figure generation.")
-
 
 def plot_20datasets(y_test, output_test, model_path):
     """Generate scatter plot for 20datasets evaluation."""
@@ -85,13 +71,15 @@ def plot_20datasets(y_test, output_test, model_path):
     plt.legend(loc="upper left")
     plt.xlabel("Observed Retention Time")
     plt.ylabel("Predicted Retention Time")
+    dataset_name = Path(model_path).parent.name
+    plt.title(f"Dataset: {dataset_name}")  # Add dataset name as title
     plt.axis("scaled")
     ax.plot([0, max_value], [0, max_value], ls="--", c=".5")
     plt.xlim(0, max_value)
     plt.ylim(0, max_value)
+    save_path = model_path.replace("best.pth", "scatter_plot.png")
+    plt.savefig(save_path, dpi=300)
     plt.show()
-    # plt.savefig(model_path.replace(".pth", "_20datasets.png"), dpi=300)
-    # print(f"Figure saved: {model_path.replace('.pth', '_20datasets.png')}")
 
 
 def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path):
@@ -110,31 +98,106 @@ def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path)
     ax.plot([0, max_value], [0, max_value], ls="--", c=".5")
     plt.xlim(0, max_value)
     plt.ylim(0, max_value)
-    plt.savefig(model_path.replace(".pth", "_ptm.png"), dpi=300)
-    print(f"Figure saved: {model_path.replace('.pth', '_ptm.png')}")
+    save_path = model_path.replace(".pth", "_ptm.png")
+    plt.savefig(save_path, dpi=300)
+    plt.show()
+
 
 
 def plot_aa_glycine(model_path):
-    """Generate boxplot for AA glycine evaluation."""
+    """Generate AA glycine evaluation figure."""
     aas = ["A", "C", "D", "E", "F", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"]
-    paths = ["saved_models/aa_cv/diamino1_atom_stan_mollog_newMeta/" + aa + "_best_results.csv" for aa in aas]
+    general_path = os.path.dirname(model_path) + os.sep
+    paths = [general_path + aa + "_best_results.csv" for aa in aas]
+    dataset_name = os.path.basename(os.path.dirname(model_path))
 
-    data = []
-    for aa, path in zip(aas, paths):
+    aa_colors = {
+        "R": "C2", "H": "C2", "K": "C2",
+        "E": "C3", "D": "C3",
+        "S": "C1", "T": "C1", "N": "C1", "Q": "C1",
+        "C": "C5", "G": "C5", "P": "C5",
+        "A": "C0", "I": "C0", "L": "C0", "M": "C0",
+        "F": "C0", "W": "C0", "Y": "C0", "V": "C0"
+    }
+
+    # Number of training peptides
+    dataset_name_data = dataset_name.split("_")[0]
+    num_train_pep = {
+        aa: pd.read_csv(f"../data/modified_glycine_evaluation/{dataset_name_data}_{aa}_train.csv").shape[0]
+        for aa in aas
+    }
+    max_train_set = round(max(num_train_pep.values()), -3)
+
+    plt.figure(figsize=(6, 6.5))
+    rs, r_gs = [], []
+
+    print('AA: Encoded, Not Encoded')
+    for aa in aas:
+        file_path = os.path.join(general_path, f"{aa}_best_results.csv")
+
         try:
-            df = pd.read_csv(path)
-            mae = mean_absolute_error(df["y_test"], df["output_test"])
-            mae_glyc = mean_absolute_error(df["y_test"], df["output_extra"])
-            data.append([aa, mae, "AA"])
-            data.append([aa, mae_glyc, "Glycine"])
-        except FileNotFoundError:
-            print(f"File not found: {path}")
+            df = pd.read_csv(file_path)
 
-    df_aa = pd.DataFrame(data, columns=["Amino Acid", "Relative MAE", "Type"])
-    plt.figure(figsize=(18, 6))
-    sns.boxplot(x="Amino Acid", y="Relative MAE", hue="Type", data=df_aa, palette=["grey", "#276ba6"])
-    plt.xlabel("Amino Acid", fontsize=12)
-    plt.ylabel("Relative MAE", fontsize=12)
-    plt.legend(title="Encoding Type")
-    plt.savefig(model_path.replace(".pth", "_aa_glycine.png"), dpi=300)
-    print(f"Figure saved: {model_path.replace('.pth', '_aa_glycine.png')}")
+            # Rename incorrect column if necessary
+            if "# y_test" in df.columns:
+                df.rename(columns={"# y_test": "y_test"}, inplace=True)
+
+            r = sum(abs(df["output_test"] - df["y_test"])) / len(df.index)
+            r_glyc = sum(abs(df["output_test_g"] - df["y_test"])) / len(df.index)
+
+            print(aa, ':', r, r_glyc)
+            rs.append(r)
+            r_gs.append(r_glyc)
+
+            col_point = aa_colors.get(aa, "grey")
+
+            # Scatter plot
+            plt.scatter(r, r_glyc,
+                        s=(num_train_pep[aa] / (max_train_set * 0.03)) ** 2,
+                        facecolors=col_point,
+                        linewidths=2,
+                        alpha=0.1,
+                        edgecolors=col_point)
+
+            plt.scatter(r, r_glyc,
+                        s=(num_train_pep[aa] / (max_train_set * 0.03)) ** 2,
+                        facecolors="none",
+                        linewidths=2,
+                        edgecolors=col_point)
+
+            # Annotate with amino acid labels
+            plt.annotate(aa, xy=(r, r_glyc), fontsize=8, verticalalignment='center', horizontalalignment='center')
+
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        except KeyError as e:
+            print(f"Missing column in {file_path}: {e}")
+
+    # Set limits and plot diagonal reference line
+    min_val = min(min(rs), min(r_gs))
+    max_val = max(max(rs), max(r_gs))
+    range_val = max_val - min_val
+
+    plt.plot([min_val - 0.05 * range_val, max_val + 0.05 * range_val],
+             [min_val - 0.05 * range_val, max_val + 0.05 * range_val],
+             c="grey", linestyle="--", linewidth=0.5, zorder=0)
+
+    plt.xlim(min_val - 0.05 * range_val, max_val + 0.05 * range_val)
+    plt.ylim(min_val - 0.05 * range_val, max_val + 0.05 * range_val)
+
+    # Legend for number of training peptides
+    percentages = [0.25, 0.5, 0.75, 1]
+    for num_train in [int(max_train_set * perc) for perc in percentages]:
+        plt.scatter([], [], c='k', alpha=0.3, s=(num_train / (max_train_set * 0.03)) ** 2,
+                    label=str(num_train))
+
+    plt.legend(scatterpoints=1, frameon=False, labelspacing=1, title='Number of training peptides')
+
+    # Labels and title
+    plt.xlabel("MAE encoding the amino acid (min)")
+    plt.ylabel("MAE encoding the amino acid as glycine (min)")
+
+    # Save and show plot
+    save_path = os.path.join(general_path, f"{dataset_name}_best.png")
+    plt.savefig(save_path, dpi=300)
+    plt.show()
