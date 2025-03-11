@@ -84,8 +84,8 @@ def plot_20datasets(y_test, output_test, model_path):
 
 def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path):
     """Generate scatter plot for PTM evaluation."""
-    mae_test = mean_absolute_error(y_test, output_test)
-    mae_no_mod = mean_absolute_error(y_test_no_mod, output_test_no_mod)
+    mae_test = mean_absolute_error(y_test, output_test) * 60
+    mae_no_mod = mean_absolute_error(y_test_no_mod, output_test_no_mod) * 60
     max_value = max(output_test)
 
     fig, ax = plt.subplots(figsize=(7, 7))

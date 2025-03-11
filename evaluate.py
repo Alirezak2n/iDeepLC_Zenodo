@@ -80,7 +80,7 @@ def evaluate_model(
 
     # Save results
     if save_results:
-        filename = model_path.replace('.pth', '_results.csv')
+        filename = model_path.replace('.pth', '_output_results.csv')
 
         if output_extra is not None:
             data_to_save = np.column_stack((y_test, output_test, output_extra))
@@ -89,7 +89,7 @@ def evaluate_model(
             data_to_save = np.column_stack((y_test, output_test))
             header = "y_test,output_test"
 
-        np.savetxt(filename, data_to_save, delimiter=',', header=header, fmt='%.6f')
+        np.savetxt(filename, data_to_save, delimiter=',', header=header, fmt='%.6f', comments='')
         print(f"Results saved to {filename}")
 
     return loss_test, corr_test, output_test, y_test  # Ensure a proper return value
