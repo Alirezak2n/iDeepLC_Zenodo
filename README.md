@@ -91,6 +91,9 @@ To install dependencies:
 ```sh
 pip install -r requirements.txt
 ```
+## Data download 
+
+Due to size restriction, the data is not included in this repository. The data can be downloaded from Zenodo at the following link: [Zenodo Data](https://zenodo.org/records/15011301).
 
 ---
 
