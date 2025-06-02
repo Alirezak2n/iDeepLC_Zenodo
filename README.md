@@ -1,3 +1,5 @@
+![ideeplc2](https://github.com/user-attachments/assets/86e9b793-39be-4f62-8119-5c6a333af487)
+
 # iDeepLC: A deep Learning-based retention time predictor for unseen modified peptides with a novel encoding system
 
 ## Overview
