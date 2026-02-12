@@ -79,7 +79,7 @@ def plot_20datasets(y_test, output_test, model_path):
     plt.ylim(0, max_value)
     save_path = model_path.replace("best.pth", "scatter_plot.png")
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    # plt.show()
 
 
 def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path):
@@ -100,7 +100,7 @@ def plot_ptm(y_test, output_test, y_test_no_mod, output_test_no_mod, model_path)
     plt.ylim(0, max_value)
     save_path = model_path.replace(".pth", "_ptm.png")
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    # plt.show()
 
 
 
@@ -200,4 +200,4 @@ def plot_aa_glycine(model_path):
     # Save and show plot
     save_path = os.path.join(general_path, f"{dataset_name}_best.png")
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    # plt.show()
