@@ -28,6 +28,11 @@ MODSEQ_CANDIDATES = [
     "modified_peptide","Peptide","Sequence"
 ]
 
+STRIPPEDSEQ_CANDIDATES = [
+    "Stripped.Sequence", "StrippedSequence", "stripped_sequence", "StrippedPeptide",
+    "Stripped.Peptide", "strippedpeptide"
+]
+
 def find_col(schema: pa.Schema, candidates: List[str]) -> Optional[str]:
     names = set(schema.names)
     for c in candidates:
@@ -75,15 +80,20 @@ def parse_modseq_to_seq_mods(modseq: Optional[str]) -> Tuple[str, str]:
     mod_str = "|".join([f"{pos}|{name}" for pos, name in mods])
     return stripped, mod_str
 
+def sum_bool(arr: pa.Array) -> int:
+    # arr is boolean with possible nulls
+    return int(pc.sum(pc.cast(pc.fill_null(arr, False), pa.int64())).as_py())
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--in_parquet", required=True)
     ap.add_argument("--out_filtered_parquet", required=True)
     ap.add_argument("--out_ideeplc_csv", required=True)
     ap.add_argument("--modified_col", default="")
+    ap.add_argument("--stripped_col", default="")   # optional override
     ap.add_argument("--key_col_name", default="ideeplc_key")
-    ap.add_argument("--batch_size", type=int, default=200_000)
-    ap.add_argument("--sqlite_tmp", default="")  # optional override
+    ap.add_argument("--batch_size", type=int, default=2000000)
+    ap.add_argument("--sqlite_tmp", default="")     # optional override
     args = ap.parse_args()
 
     in_path = os.path.expanduser(args.in_parquet)
@@ -94,12 +104,18 @@ def main() -> None:
     os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
 
     dataset = ds.dataset(in_path, format="parquet")
+
     mod_col = args.modified_col.strip() or find_col(dataset.schema, MODSEQ_CANDIDATES)
     if not mod_col:
         raise RuntimeError("Could not detect modified sequence column")
 
-    # Prepare output parquet schema (input schema + key column)
-    out_schema = dataset.schema.append(pa.field(args.key_col_name, pa.string()))
+    stripped_col = args.stripped_col.strip() or find_col(dataset.schema, STRIPPEDSEQ_CANDIDATES)
+    if not stripped_col:
+        raise RuntimeError("Could not detect stripped sequence column (e.g. 'Stripped.Sequence')")
+
+    # Avoid duplicate field names: replace key column if it already exists
+    has_key = args.key_col_name in dataset.schema.names
+    out_schema = dataset.schema if has_key else dataset.schema.append(pa.field(args.key_col_name, pa.string()))
 
     # SQLite for bounded-memory deduplication for iDeepLC
     sqlite_path = os.path.expanduser(args.sqlite_tmp.strip()) if args.sqlite_tmp.strip() else out_csv + ".sqlite"
@@ -116,7 +132,10 @@ def main() -> None:
     """)
     conn.commit()
 
-    removed_rows = 0
+    removed_doublemod = 0
+    removed_ux = 0
+    removed_both = 0
+    removed_any = 0
     total_written = 0
 
     writer: Optional[pq.ParquetWriter] = None
@@ -124,12 +143,24 @@ def main() -> None:
         for batch in dataset.to_batches(batch_size=args.batch_size):
             tbl = pa.Table.from_batches([batch])
 
-            # Arrow-native regex check: contains ')(UniMod'
+            # 1) Filter: double-mod-on-same-site rows: contains ')(UniMod' in modified sequence column
             modseq_arr = pc.cast(tbl[mod_col], pa.string())
-            bad = pc.match_substring_regex(modseq_arr, r"\)\(UniMod")
-            removed_rows += int(pc.sum(pc.cast(bad, pa.int64())).as_py())
+            bad_double = pc.fill_null(pc.match_substring_regex(modseq_arr, r"\)\(UniMod"), False)
 
-            good = pc.invert(bad)
+            # 2) Filter: remove rows where Stripped.Sequence contains U or X
+            # Equivalent to: ~temp["Stripped.Sequence"].astype(str).str.contains(r"[UX]")
+            stripped_arr = pc.cast(tbl[stripped_col], pa.string())
+            bad_ux_local = pc.fill_null(pc.match_substring_regex(stripped_arr, r"[UX]"), False)
+
+            bad_both = pc.and_(bad_double, bad_ux_local)
+            bad_any_local = pc.or_(bad_double, bad_ux_local)
+
+            removed_doublemod += sum_bool(bad_double)
+            removed_ux += sum_bool(bad_ux_local)
+            removed_both += sum_bool(bad_both)
+            removed_any += sum_bool(bad_any_local)
+
+            good = pc.invert(bad_any_local)
             filtered = tbl.filter(good)
             if filtered.num_rows == 0:
                 continue
@@ -150,16 +181,26 @@ def main() -> None:
 
             # Deduplicate for iDeepLC in SQLite (bounded RAM)
             if to_insert:
-                cur.executemany("INSERT OR IGNORE INTO ideeplc(key, seq, modifications) VALUES (?, ?, ?)", to_insert)
+                cur.executemany(
+                    "INSERT OR IGNORE INTO ideeplc(key, seq, modifications) VALUES (?, ?, ?)",
+                    to_insert
+                )
                 conn.commit()
 
             key_arr = pa.array(keys, type=pa.string())
-            out_batch = filtered.append_column(args.key_col_name, key_arr)
+
+            # Avoid duplicate column names: replace existing key column if present
+            if has_key:
+                idx = filtered.schema.get_field_index(args.key_col_name)
+                out_batch = filtered.set_column(idx, args.key_col_name, key_arr)
+            else:
+                out_batch = filtered.append_column(args.key_col_name, key_arr)
 
             if writer is None:
-                writer = pq.ParquetWriter(out_pq, out_schema)
+                writer = pq.ParquetWriter(out_pq, out_schema, compression="snappy")
             writer.write_table(out_batch)
             total_written += out_batch.num_rows
+
     finally:
         if writer is not None:
             writer.close()
@@ -172,12 +213,14 @@ def main() -> None:
             for seq, mods, key in cur.execute("SELECT seq, modifications, key FROM ideeplc ORDER BY key"):
                 w.writerow([seq, mods, 0.0, key])
 
-        # Count unique rows
         unique_count = cur.execute("SELECT COUNT(*) FROM ideeplc").fetchone()[0]
         conn.close()
 
     print(f"Filtered parquet: {out_pq}")
-    print(f"Removed rows (double-mod): {removed_rows}")
+    print(f"Removed rows (double-mod): {removed_doublemod}")
+    print(f"Removed rows (U/X in {stripped_col}): {removed_ux}")
+    print(f"Removed rows (both criteria): {removed_both}")
+    print(f"Removed rows (any criterion): {removed_any}")
     print(f"Written rows (filtered parquet): {total_written:,}")
     print(f"Unique iDeepLC rows: {unique_count:,}")
     print(f"iDeepLC input CSV: {out_csv}")
